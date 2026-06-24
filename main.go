@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,16 +23,23 @@ var (
 	printMu      sync.Mutex
 	lastPrint    time.Time
 
-	// semaphore limits concurrent goroutines to avoid fd exhaustion
-	sem = make(chan struct{}, runtime.NumCPU()*4)
+	sem chan struct{}
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: rmrf <directory>")
+	concurrency := flag.Int("c", runtime.NumCPU()*4, "max concurrent directory goroutines")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: rmrf [flags] <directory>")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	if flag.NArg() < 1 {
+		flag.Usage()
 		os.Exit(1)
 	}
-	dir := os.Args[1]
+	dir := flag.Arg(0)
+	sem = make(chan struct{}, *concurrency)
 
 	info, err := os.Stat(dir)
 	if err != nil {
