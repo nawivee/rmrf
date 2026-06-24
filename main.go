@@ -16,6 +16,7 @@ var (
 	filesDeleted atomic.Int64
 	bytesFreed   atomic.Int64
 	startTime    time.Time
+	targetDir    string
 	done         atomic.Bool
 	deleteErr    atomic.Value
 	printMu      sync.Mutex
@@ -43,6 +44,7 @@ func main() {
 	}
 
 	startTime = time.Now()
+	targetDir = dir
 	fmt.Println("Progress available at http://localhost:8698")
 	fmt.Printf("Deleting %s...\n", dir)
 
@@ -144,8 +146,8 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprintf(w, "status:  %s\nstarted: %s\nfiles:   %d\nfreed:   %s\nelapsed: %s\n",
-		status, startTime.Format(time.RFC3339), files, formatBytes(freed), elapsed)
+	fmt.Fprintf(w, "status:  %s\ndir:     %s\nstarted: %s\nfiles:   %d\nfreed:   %s\nelapsed: %s\n",
+		status, targetDir, startTime.Format(time.RFC3339), files, formatBytes(freed), elapsed)
 }
 
 func formatBytes(b int64) string {
