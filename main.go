@@ -26,7 +26,8 @@ var (
 	printMu      sync.Mutex
 	lastPrint    time.Time
 
-	sem chan struct{}
+	sem     chan struct{}
+	silence bool
 )
 
 func version() string {
@@ -42,6 +43,9 @@ func main() {
 		defaultConcurrency = 1
 	}
 	concurrency := flag.Int("c", defaultConcurrency, "max concurrent directory goroutines (auto: 1 for HDD, NumCPU*4 for SSD)")
+	silent := flag.Bool("s", false, "silent mode, no output")
+	port := flag.Int("port", 8698, "HTTP progress server port")
+	noHTTP := flag.Bool("no-http", false, "disable HTTP progress server (overrides -port)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "rmrf %s\nusage: rmrf [flags] <directory>\n", version())
 		flag.PrintDefaults()
@@ -67,13 +71,21 @@ func main() {
 
 	startTime = time.Now()
 	targetDir = dir
-	fmt.Println("Progress available at http://localhost:8698")
-	fmt.Printf("Deleting %s...\n", dir)
+	silence = *silent
+	httpEnabled := !*noHTTP
+	if httpEnabled {
+		go func() {
+			http.HandleFunc("/", handleStatus)
+			http.ListenAndServe(fmt.Sprintf(":%d", *port), nil)
+		}()
+	}
 
-	go func() {
-		http.HandleFunc("/", handleStatus)
-		http.ListenAndServe(":8698", nil)
-	}()
+	if !*silent {
+		if httpEnabled {
+			fmt.Printf("Progress available at http://localhost:%d\n", *port)
+		}
+		fmt.Printf("Deleting %s...\n", dir)
+	}
 
 	if err := removeDir(dir); err != nil {
 		deleteErr.Store(err.Error())
@@ -83,9 +95,11 @@ func main() {
 	}
 
 	done.Store(true)
-	elapsed := time.Since(startTime).Round(time.Millisecond)
-	fmt.Printf("\rDone: %d files deleted, %s freed in %s\n",
-		filesDeleted.Load(), formatBytes(bytesFreed.Load()), elapsed)
+	if !*silent {
+		elapsed := time.Since(startTime).Round(time.Millisecond)
+		fmt.Printf("\rDone: %d files deleted, %s freed in %s\n",
+			filesDeleted.Load(), formatBytes(bytesFreed.Load()), elapsed)
+	}
 }
 
 func removeDir(path string) error {
@@ -152,6 +166,9 @@ func removeDir(path string) error {
 }
 
 func printProgress() {
+	if silence {
+		return
+	}
 	printMu.Lock()
 	defer printMu.Unlock()
 	if time.Since(lastPrint) < 200*time.Millisecond {
