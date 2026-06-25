@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -27,7 +29,11 @@ var (
 )
 
 func main() {
-	concurrency := flag.Int("c", runtime.NumCPU()*4, "max concurrent directory goroutines")
+	defaultConcurrency := runtime.NumCPU() * 4
+	if rotational, err := isRotational(os.Args[len(os.Args)-1]); err == nil && rotational {
+		defaultConcurrency = 1
+	}
+	concurrency := flag.Int("c", defaultConcurrency, "max concurrent directory goroutines (auto: 1 for HDD, NumCPU*4 for SSD)")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: rmrf [flags] <directory>")
 		flag.PrintDefaults()
@@ -88,15 +94,22 @@ func removeDir(path string) error {
 		for _, entry := range entries {
 			full := filepath.Join(path, entry.Name())
 			if entry.IsDir() {
-				wg.Add(1)
-				sem <- struct{}{}
-				go func(p string) {
-					defer wg.Done()
-					defer func() { <-sem }()
-					if err := removeDir(p); err != nil && firstErr.Load() == nil {
+				select {
+				case sem <- struct{}{}:
+					wg.Add(1)
+					go func(p string) {
+						defer wg.Done()
+						defer func() { <-sem }()
+						if err := removeDir(p); err != nil && firstErr.Load() == nil {
+							firstErr.Store(err)
+						}
+					}(full)
+				default:
+					// sem full — process inline to avoid deadlock
+					if err := removeDir(full); err != nil && firstErr.Load() == nil {
 						firstErr.Store(err)
 					}
-				}(full)
+				}
 			} else {
 				info, _ := entry.Info()
 				if info != nil {
@@ -156,6 +169,34 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	fmt.Fprintf(w, "status:  %s\ndir:     %s\nstarted: %s\nfiles:   %d\nfreed:   %s\nelapsed: %s\n",
 		status, targetDir, startTime.Format(time.RFC3339), files, formatBytes(freed), elapsed)
+}
+
+// isRotational checks /sys/dev/block to detect HDD vs SSD.
+func isRotational(path string) (bool, error) {
+	var st syscall.Stat_t
+	if err := syscall.Stat(path, &st); err != nil {
+		return false, err
+	}
+	major := (st.Dev >> 8) & 0xfff
+	minor := (st.Dev & 0xff) | ((st.Dev >> 12) & 0xfff00)
+
+	sysPath := fmt.Sprintf("/sys/dev/block/%d:%d", major, minor)
+	resolved, err := filepath.EvalSymlinks(sysPath)
+	if err != nil {
+		return false, err
+	}
+
+	rotPath := filepath.Join(resolved, "queue/rotational")
+	if _, err := os.Stat(rotPath); os.IsNotExist(err) {
+		// partition — go up to the parent disk
+		rotPath = filepath.Join(filepath.Dir(resolved), "queue/rotational")
+	}
+
+	data, err := os.ReadFile(rotPath)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(data)) == "1", nil
 }
 
 func formatBytes(b int64) string {
