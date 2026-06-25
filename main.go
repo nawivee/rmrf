@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,13 @@ var (
 	sem chan struct{}
 )
 
+func version() string {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+		return info.Main.Version
+	}
+	return "dev"
+}
+
 func main() {
 	defaultConcurrency := runtime.NumCPU() * 4
 	if rotational, err := isRotational(os.Args[len(os.Args)-1]); err == nil && rotational {
@@ -35,7 +43,7 @@ func main() {
 	}
 	concurrency := flag.Int("c", defaultConcurrency, "max concurrent directory goroutines (auto: 1 for HDD, NumCPU*4 for SSD)")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: rmrf [flags] <directory>")
+		fmt.Fprintf(os.Stderr, "rmrf %s\nusage: rmrf [flags] <directory>\n", version())
 		flag.PrintDefaults()
 	}
 	flag.Parse()
